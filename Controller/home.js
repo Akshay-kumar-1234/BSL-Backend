@@ -120,27 +120,44 @@ export async function queryData(req, res) {
 
     const lineFilter = selectedLines.length
       ? `|> filter(fn: (r) => ${selectedLines.map(l => `r["LINE"] == "${l}"`).join(" or ")})`
-      : '';
+      : "";
 
     const fieldFilter = selectedFields.length
       ? `|> filter(fn: (r) => ${selectedFields.map(f => `r["_field"] == "${f}"`).join(" or ")})`
-      : '';
+      : "";
 
+    // ✅ Correct Flux query (time wrapped properly)
     const query = flux`
-  from(bucket: ${bucket})
-    |> range(start: time(v: "${start.toISOString()}"), stop: time(v: "${end.toISOString()}"))
-    |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
-    ${lineFilter}
-    ${fieldFilter}
-`;
+      from(bucket: ${bucket})
+        |> range(start: time(v: "${start.toISOString()}"), stop: time(v: "${end.toISOString()}"))
+        |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
+        ${lineFilter}
+        ${fieldFilter}
+        |> sort(columns: ["_time"])
+    `;
 
-
-    console.log("Generated Flux Query:\n", String(query));
+    console.log("🧩 Generated Flux Query:\n", String(query));
 
     const rows = await queryApi.collectRows(query);
 
     let organized = organizeData(rows);
     organized = computeJPH(organized);
+
+    // 🔹 Format timestamps to HH:mm
+    for (const line of Object.keys(organized)) {
+      for (const field of Object.keys(organized[line])) {
+        if (Array.isArray(organized[line][field])) {
+          organized[line][field] = organized[line][field].map(point => ({
+            time: new Date(point.time).toLocaleTimeString("en-GB", {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            }),
+            value: point.value,
+          }));
+        }
+      }
+    }
 
     res.json({
       success: true,
