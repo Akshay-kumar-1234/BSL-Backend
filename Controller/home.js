@@ -98,15 +98,6 @@ function getShiftRange(shift, dateStr) {
 const ORG = INFLUX_ORG;
 const DEFAULT_BUCKET = INFLUX_BUCKET;
 
-export async function checkConnection(req, res) {
-  try {
-    const ok = await isInfluxHealthy();
-    if (!ok) return res.status(500).json({ success: false, message: 'Influx is not healthy' });
-    res.json({ success: true, message: 'Influx connected' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Health check failed', error: err?.message });
-  }
-}
 export async function queryData(req, res) {
   try {
     const queryApi = influxDB.getQueryApi(INFLUX_ORG);
@@ -118,32 +109,33 @@ export async function queryData(req, res) {
     const selectedLines = lines ? lines.split(",") : [];
     const selectedFields = fields ? fields.split(",") : [];
 
-    const lineFilter = selectedLines.length
-      ? `|> filter(fn: (r) => ${selectedLines.map(l => `r["LINE"] == "${l}"`).join(" or ")})`
-      : "";
+    // ✅ Build filters as proper Flux expressions
+    const lineCondition = selectedLines.length
+      ? selectedLines.map(l => `r["LINE"] == "${l}"`).join(" or ")
+      : "true"; // no filter if none selected
 
-    const fieldFilter = selectedFields.length
-      ? `|> filter(fn: (r) => ${selectedFields.map(f => `r["_field"] == "${f}"`).join(" or ")})`
-      : "";
+    const fieldCondition = selectedFields.length
+      ? selectedFields.map(f => `r["_field"] == "${f}"`).join(" or ")
+      : "true";
 
-    // ✅ Correct Flux query (time wrapped properly)
-    const query = flux`
-      from(bucket: ${bucket})
+    // ✅ Correct Flux query — clean & safe
+    const query = `
+      from(bucket: "${bucket}")
         |> range(start: time(v: "${start.toISOString()}"), stop: time(v: "${end.toISOString()}"))
         |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
-        ${lineFilter}
-        ${fieldFilter}
+        |> filter(fn: (r) => ${lineCondition})
+        |> filter(fn: (r) => ${fieldCondition})
         |> sort(columns: ["_time"])
     `;
 
-    console.log("🧩 Generated Flux Query:\n", String(query));
+    console.log("🧩 Final Flux Query:\n", query);
 
     const rows = await queryApi.collectRows(query);
 
     let organized = organizeData(rows);
     organized = computeJPH(organized);
 
-    // 🔹 Format timestamps to HH:mm
+    // 🔹 Format timestamps
     for (const line of Object.keys(organized)) {
       for (const field of Object.keys(organized[line])) {
         if (Array.isArray(organized[line][field])) {
