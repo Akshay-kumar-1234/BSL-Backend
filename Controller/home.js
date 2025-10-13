@@ -58,11 +58,45 @@ function computeJPH(organizedData) {
  // yha tkkk 
 
 
+// ✅ Convert shift name into time range
+function getShiftRange(shift, dateStr) {
+  const now = new Date();
+  let baseDate = dateStr && dateStr !== "today"
+    ? new Date(dateStr)
+    : new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  let start, end;
+
+  switch (shift) {
+    case "Shift A":
+      start = new Date(baseDate.setHours(6, 0, 0, 0));  // 6 AM
+      end = new Date(baseDate.setHours(14, 0, 0, 0));   // 2 PM
+      break;
+    case "Shift B":
+      start = new Date(baseDate.setHours(14, 0, 0, 0)); // 2 PM
+      end = new Date(baseDate.setHours(22, 0, 0, 0));   // 10 PM
+      break;
+    case "Shift C":
+      start = new Date(baseDate.setHours(22, 0, 0, 0)); // 10 PM
+      end = new Date(baseDate);
+      end.setDate(end.getDate() + 1);
+      end.setHours(6, 0, 0, 0); // 6 AM next day
+      break;
+    default:
+      start = new Date(baseDate.setHours(0, 0, 0, 0));
+      end = new Date(baseDate.setHours(23, 59, 59, 999));
+  }
+
+  return { start, end };
+}
+
+
+
+
+
 
 const ORG = INFLUX_ORG;
 const DEFAULT_BUCKET = INFLUX_BUCKET;
-
-
 
 export async function checkConnection(req, res) {
   try {
@@ -84,72 +118,107 @@ export async function queryData(req, res) {
     const rangeInput = req.query.range || "-12h";
     const limit = Number(req.query.limit || 100);
 
-    console.log("Bucket:", bucket);
-    console.log("Range:", rangeInput);
+
+     // done by mee params
+     // 1️⃣ Get all params from frontend query string
+    const { shift, date, lines, fields } = req.query;
 
 
-let q = `
-performance = from(bucket: "${bucket}")
-  |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "Performance")
-  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) =>
-      r._field == "Quality" or 
-      r._field == "OEE" or 
-      r._field == "JPH" or
-      r._field == "Pass" or 
-      r._field == "Reject" or 
-      r._field == "Rework" or
-      r._field == "HRP06:00" or 
-      r._field == "HRP07:00" or 
-      r._field == "HRP08:00" or 
-      r._field == "HRP09:00" or 
-      r._field == "HRP10:00" or 
-      r._field == "HRP11:00" or 
-      r._field == "HRP12:00" or 
-      r._field == "HRP13:00" or 
-      r._field == "total_production_set" or
-      r._field == "Productivity" or
-      r._field == "Avail" or
-      r._field == "Total_Prod_Today"
-  )
+ // 🕒 Get shift time range
+    const { start, end } = getShiftRange(shift, date);
 
-quality = from(bucket: "${bucket}")
-  |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "QUALITY")
-  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
+    console.log(`⏰ Time Range: ${start.toISOString()} → ${end.toISOString()}`);
 
-union(tables: [performance, quality])
-  |> sort(columns: ["_time"], desc: true)
-`;
+    // Convert lines and fields into arrays
+    const selectedLines = lines ? lines.split(",") : [];
+    const selectedFields = fields ? fields.split(",") : [];
+    const ORG= process.env.INFLUX_ORG;
+
+// let q = `
+// performance = from(bucket: "${bucket}")
+//   |> range(start: ${rangeInput})
+//   |> filter(fn: (r) => r._measurement == "Performance")
+//   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
+//   |> filter(fn: (r) =>
+//       r._field == "Quality" or 
+//       r._field == "OEE" or 
+//       r._field == "JPH" or
+//       r._field == "Pass" or 
+//       r._field == "Reject" or 
+//       r._field == "Rework" or
+//       r._field == "HRP06:00" or 
+//       r._field == "HRP07:00" or 
+//       r._field == "HRP08:00" or 
+//       r._field == "HRP09:00" or 
+//       r._field == "HRP10:00" or 
+//       r._field == "HRP11:00" or 
+//       r._field == "HRP12:00" or 
+//       r._field == "HRP13:00" or 
+//       r._field == "total_production_set" or
+//       r._field == "Productivity" or
+//       r._field == "Avail" or
+//       r._field == "Total_Prod_Today"
+//   )
+
+// quality = from(bucket: "${bucket}")
+//   |> range(start: ${rangeInput})
+//   |> filter(fn: (r) => r._measurement == "QUALITY")
+//   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
+//   |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
+
+// union(tables: [performance, quality])
+//   |> sort(columns: ["_time"], desc: true)
+// `;
 
 
-    if (field) {
-      q += flux`|> filter(fn: (r) => r._field == ${field})\n`;
-    }
+//     if (field) {
+//       q += flux`|> filter(fn: (r) => r._field == ${field})\n`;
+//     }
 
-    const tags = []
-      .concat(req.query.tag || [])
-      .filter(Boolean)
-      .map((t) => {
-        const [k, ...rest] = String(t).split("=");
-        return [k, rest.join("=")];
-      })
-      .filter(([k, v]) => k && v);
+//     const tags = []
+//       .concat(req.query.tag || [])
+//       .filter(Boolean)
+//       .map((t) => {
+//         const [k, ...rest] = String(t).split("=");
+//         return [k, rest.join("=")];
+//       })
+//       .filter(([k, v]) => k && v);
 
-    for (const [k, v] of tags) {
-      q += flux`|> filter(fn: (r) => r[${k}] == ${v})\n`;
-    }
+//     for (const [k, v] of tags) {
+//       q += flux`|> filter(fn: (r) => r[${k}] == ${v})\n`;
+//     }
 
-    q += flux`
-    |> sort(columns: ["_time"], desc: true)
+//     q += flux`
+//     |> sort(columns: ["_time"], desc: true)
+//     `;
+
+//     console.log("Final Flux:\n", String(q));
+
+
+
+
+
+//done by me badd ma param
+
+    // 3️⃣ Build the dynamic Flux query
+    let q = flux`from(bucket: ${bucket})
+     |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
+      |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
     `;
 
-    console.log("Final Flux:\n", String(q));
+    if (selectedLines.length > 0) {
+      q += flux`|> filter(fn: (r) => ${selectedLines.map(l => `r["LINE"] == "${l}"`).join(" or ")})`;
+    }
 
-    // 4️⃣ Run query AFTER building it
-    const rows = await queryApi.collectRows(q);
+    if (selectedFields.length > 0) {
+      q += flux`|> filter(fn: (r) => ${selectedFields.map(f => `r["_field"] == "${f}"`).join(" or ")})`;
+    }
+
+    console.log("Generated Flux Query:\n", String(q));
+
+
+    // 4️⃣ Run query AFTER building it      // 4️⃣ Fetch data from InfluxDB
+    const rows = await queryApi.collectRows(q)||[];
 
     // 5️⃣ Organize rows (group by LINE + field)
     let organized = organizeData(rows);
@@ -157,11 +226,13 @@ union(tables: [performance, quality])
     // joo mena add kri badd ma dekhoo necha 
       organized = computeJPH(organized);
 
-    // 6️⃣ Return ONLY organized data
-    return res.json({
-      success: true,
-      data: organized,
-      // flux: String(q), // keep flux for debugging
+  await queryApi.queryRows(q, {
+      next: (row, tableMeta) => rows.push(tableMeta.toObject(row)),
+      error: (error) => console.error(error),
+      complete: () => {
+        console.log("✅ Query complete");
+        res.json({ shift, date, start, end, data: rows });
+      },
     });
   } catch (err) {
     console.error("Influx query error:", err);
