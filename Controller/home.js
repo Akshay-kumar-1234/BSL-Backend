@@ -109,100 +109,23 @@ export async function checkConnection(req, res) {
 }
 export async function queryData(req, res) {
   try {
-    // 1️⃣ Create queryApi FIRST
-    const queryApi = influxDB.getQueryApi(ORG);
+    const queryApi = influxDB.getQueryApi(INFLUX_ORG);
+    const bucket = INFLUX_BUCKET;
 
-    // 2️⃣ Setup params
-    const bucket = DEFAULT_BUCKET;
-    const field = req.query.field;
-    const rangeInput = req.query.range || "-12h";
-    const limit = Number(req.query.limit || 100);
+    // Get params from frontend
+    const { shift = "Shift A", date = "today", lines, fields } = req.query;
 
-
-     // done by mee params
-     // 1️⃣ Get all params from frontend query string
-    const { shift, date, lines, fields } = req.query;
-
-
- // 🕒 Get shift time range
+    // Get shift time range
     const { start, end } = getShiftRange(shift, date);
-
     console.log(`⏰ Time Range: ${start.toISOString()} → ${end.toISOString()}`);
 
-    // Convert lines and fields into arrays
+    // Convert string params to arrays
     const selectedLines = lines ? lines.split(",") : [];
     const selectedFields = fields ? fields.split(",") : [];
-    const ORG= process.env.INFLUX_ORG;
 
-// let q = `
-// performance = from(bucket: "${bucket}")
-//   |> range(start: ${rangeInput})
-//   |> filter(fn: (r) => r._measurement == "Performance")
-//   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-//   |> filter(fn: (r) =>
-//       r._field == "Quality" or 
-//       r._field == "OEE" or 
-//       r._field == "JPH" or
-//       r._field == "Pass" or 
-//       r._field == "Reject" or 
-//       r._field == "Rework" or
-//       r._field == "HRP06:00" or 
-//       r._field == "HRP07:00" or 
-//       r._field == "HRP08:00" or 
-//       r._field == "HRP09:00" or 
-//       r._field == "HRP10:00" or 
-//       r._field == "HRP11:00" or 
-//       r._field == "HRP12:00" or 
-//       r._field == "HRP13:00" or 
-//       r._field == "total_production_set" or
-//       r._field == "Productivity" or
-//       r._field == "Avail" or
-//       r._field == "Total_Prod_Today"
-//   )
-
-// quality = from(bucket: "${bucket}")
-//   |> range(start: ${rangeInput})
-//   |> filter(fn: (r) => r._measurement == "QUALITY")
-//   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-//   |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
-
-// union(tables: [performance, quality])
-//   |> sort(columns: ["_time"], desc: true)
-// `;
-
-
-//     if (field) {
-//       q += flux`|> filter(fn: (r) => r._field == ${field})\n`;
-//     }
-
-//     const tags = []
-//       .concat(req.query.tag || [])
-//       .filter(Boolean)
-//       .map((t) => {
-//         const [k, ...rest] = String(t).split("=");
-//         return [k, rest.join("=")];
-//       })
-//       .filter(([k, v]) => k && v);
-
-//     for (const [k, v] of tags) {
-//       q += flux`|> filter(fn: (r) => r[${k}] == ${v})\n`;
-//     }
-
-//     q += flux`
-//     |> sort(columns: ["_time"], desc: true)
-//     `;
-
-//     console.log("Final Flux:\n", String(q));
-
-
-
-
-
-//done by me badd ma param
-
-    // 3️⃣ Build the dynamic Flux query
+    // Build the query
     let q = flux`from(bucket: ${bucket})
-     |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
+      |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
       |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
     `;
 
@@ -216,27 +139,25 @@ export async function queryData(req, res) {
 
     console.log("Generated Flux Query:\n", String(q));
 
+    // Execute once
+    const rows = await queryApi.collectRows(q);
 
-    // 4️⃣ Run query AFTER building it      // 4️⃣ Fetch data from InfluxDB
-    const rows = await queryApi.collectRows(q)||[];
-
-    // 5️⃣ Organize rows (group by LINE + field)
+    // Organize + compute JPH
     let organized = organizeData(rows);
+    organized = computeJPH(organized);
 
-    // joo mena add kri badd ma dekhoo necha 
-      organized = computeJPH(organized);
-
-  await queryApi.queryRows(q, {
-      next: (row, tableMeta) => rows.push(tableMeta.toObject(row)),
-      error: (error) => console.error(error),
-      complete: () => {
-        console.log("✅ Query complete");
-        res.json({ shift, date, start, end, data: rows });
-      },
+    // Send single clean JSON response
+    res.json({
+      success: true,
+      shift,
+      date,
+      start,
+      end,
+      data: organized,
     });
   } catch (err) {
-    console.error("Influx query error:", err);
-    return res.status(500).json({
+    console.error("❌ Influx query error:", err);
+    res.status(500).json({
       success: false,
       message: "Query failed",
       error: err?.message,
