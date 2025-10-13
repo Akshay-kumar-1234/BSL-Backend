@@ -127,12 +127,13 @@ export async function queryData(req, res) {
       : '';
 
     const query = flux`
-      from(bucket: ${bucket})
-        |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
-        |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
-        ${lineFilter}
-        ${fieldFilter}
-    `;
+  from(bucket: ${bucket})
+    |> range(start: time(v: "${start.toISOString()}"), stop: time(v: "${end.toISOString()}"))
+    |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
+    ${lineFilter}
+    ${fieldFilter}
+`;
+
 
     console.log("Generated Flux Query:\n", String(query));
 
