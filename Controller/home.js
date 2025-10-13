@@ -112,41 +112,35 @@ export async function queryData(req, res) {
     const queryApi = influxDB.getQueryApi(INFLUX_ORG);
     const bucket = INFLUX_BUCKET;
 
-    // Get params from frontend
     const { shift = "Shift A", date = "today", lines, fields } = req.query;
-
-    // Get shift time range
     const { start, end } = getShiftRange(shift, date);
-    console.log(`⏰ Time Range: ${start.toISOString()} → ${end.toISOString()}`);
 
-    // Convert string params to arrays
     const selectedLines = lines ? lines.split(",") : [];
     const selectedFields = fields ? fields.split(",") : [];
 
-    // Build the query
-    let q = flux`from(bucket: ${bucket})
-      |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
-      |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
+    const lineFilter = selectedLines.length
+      ? `|> filter(fn: (r) => ${selectedLines.map(l => `r["LINE"] == "${l}"`).join(" or ")})`
+      : '';
+
+    const fieldFilter = selectedFields.length
+      ? `|> filter(fn: (r) => ${selectedFields.map(f => `r["_field"] == "${f}"`).join(" or ")})`
+      : '';
+
+    const query = flux`
+      from(bucket: ${bucket})
+        |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
+        |> filter(fn: (r) => r["_measurement"] == "Performance" or r["_measurement"] == "QUALITY")
+        ${lineFilter}
+        ${fieldFilter}
     `;
 
-    if (selectedLines.length > 0) {
-      q += flux`|> filter(fn: (r) => ${selectedLines.map(l => `r["LINE"] == "${l}"`).join(" or ")})`;
-    }
+    console.log("Generated Flux Query:\n", String(query));
 
-    if (selectedFields.length > 0) {
-      q += flux`|> filter(fn: (r) => ${selectedFields.map(f => `r["_field"] == "${f}"`).join(" or ")})`;
-    }
+    const rows = await queryApi.collectRows(query);
 
-    console.log("Generated Flux Query:\n", String(q));
-
-    // Execute once
-    const rows = await queryApi.collectRows(q);
-
-    // Organize + compute JPH
     let organized = organizeData(rows);
     organized = computeJPH(organized);
 
-    // Send single clean JSON response
     res.json({
       success: true,
       shift,
