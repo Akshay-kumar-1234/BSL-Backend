@@ -9,7 +9,6 @@ app.use(express.json())
 
 
 // ✅ Enable gzip compression for all responses
-app.use(compression());
 app.use(cors({
   origin: "*", // allow any origin
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // allow all HTTP methods
