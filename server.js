@@ -1,12 +1,12 @@
 import express from 'express'
-import compression from "compression";
 import cors from 'cors'
 import dotenv from 'dotenv';
 // import home from "./Routes/home.js";
 import InfluxRouter from './Routes/home.js';
 dotenv.config();
-app.use(express.json())
 const app = express();
+app.use(express.json())
+
 
 // ✅ Enable gzip compression for all responses
 app.use(compression());
