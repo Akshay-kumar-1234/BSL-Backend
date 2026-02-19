@@ -73,29 +73,28 @@ export async function checkConnection(req, res) {
 }
 export async function queryData(req, res) {
   try {
+    // 1️⃣ Create queryApi FIRST
     const queryApi = influxDB.getQueryApi(ORG);
 
+    // 2️⃣ Setup params
     const bucket = DEFAULT_BUCKET;
-    const rangeInput = req.query.range || "-12h";
+    const field = req.query.field;
+    const rangeInput = req.query.range || "-2h";
     const limit = Number(req.query.limit || 100);
 
-    const fluxQuery = `
+    console.log("Bucket:", bucket);
+    console.log("Range:", rangeInput);
+
+let q = `
 from(bucket: "${bucket}")
   |> range(start: ${rangeInput})
+  |> filter(fn: (r) => r._measurement == "Performance" or r._measurement == "QUALITY")
+  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
   |> filter(fn: (r) =>
-      r._measurement == "Performance" or
-      r._measurement == "QUALITY"
-  )
-  |> filter(fn: (r) =>
-      r.LINE == "Front_Line" or
-      r.LINE == "RB" or
-      r.LINE == "RC"
-  )
-  |> filter(fn: (r) =>
-      r._field == "Quality" or
-      r._field == "OEE" or
-      r._field == "Pass" or
-      r._field == "Reject" or
+      r._field == "Quality" or 
+      r._field == "OEE" or 
+      r._field == "Pass" or 
+      r._field == "Reject" or 
       r._field == "Rework" or
       r._field == "Productivity" or
       r._field == "Avail" or
@@ -104,28 +103,66 @@ from(bucket: "${bucket}")
   |> aggregateWindow(every: 10m, fn: mean, createEmpty: false)
   |> sort(columns: ["_time"], desc: true)
   |> limit(n: ${limit})
-`;
 
-    console.log("Final Flux Query:\n", fluxQuery);
+quality = from(bucket: "${bucket}")
+  |> range(start: ${rangeInput})
+  |> filter(fn: (r) => r._measurement == "QUALITY")
+  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
+  |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
 
-    const rows = await queryApi.collectRows(fluxQuery);
+union(tables: [performance, quality])
+  |> sort(columns: ["_time"], desc: true)
+`
+;
 
+    if (field) {
+      q += flux`|> filter(fn: (r) => r._field == ${field})\n`;
+    }
+
+    const tags = []
+      .concat(req.query.tag || [])
+      .filter(Boolean)
+      .map((t) => {
+        const [k, ...rest] = String(t).split("=");
+        return [k, rest.join("=")];
+      })
+      .filter(([k, v]) => k && v);
+
+    for (const [k, v] of tags) {
+      q += flux`|> filter(fn: (r) => r[${k}] == ${v})\n`;
+    }
+
+    q += flux`
+    |> sort(columns: ["_time"], desc: true)
+    `;
+
+    console.log("Final Flux:\n", String(q));
+
+    // 4️⃣ Run query AFTER building it
+    const rows = await queryApi.collectRows(q);
+
+    // 5️⃣ Organize rows (group by LINE + field)
     let organized = organizeData(rows);
-    organized = computeJPH(organized);
 
+    // joo mena add kri badd ma dekhoo necha 
+      organized = computeJPH(organized);
+
+    // 6️⃣ Return ONLY organized data
     return res.json({
       success: true,
       data: organized,
+      // flux: String(q), // keep flux for debugging
     });
-
   } catch (err) {
     console.error("Influx query error:", err);
-
     return res.status(500).json({
       success: false,
       message: "Query failed",
-      error: err.message,
+      error: err?.message,
     });
   }
 }
+
+
+
 
