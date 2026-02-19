@@ -6,7 +6,8 @@ const url ="http://20.198.22.6:8086"
 const token = "Y__1DCnm2uTaCeqnTy2Xe6AScyzrM1zSwfrPBiXy9ZjuxEx5DAWfOz4BD-weu0NyQDeR7ig_uBaj2k8B8gKc9A=="
 const org = "BSL Kharkhoda";  // 👈 ADD THIS (must match InfluxDB Org exactly!)
 const bucket = "SHIFT_A";
-export const influxDB = new InfluxDB({ url, token });
+const timeout =30000; // 10 seconds timeout for API calls
+export const influxDB = new InfluxDB({ url, token, timeout });
 export const bucketsAPI = new BucketsAPI(influxDB);
 
 
