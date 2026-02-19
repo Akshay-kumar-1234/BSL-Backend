@@ -79,48 +79,42 @@ export async function queryData(req, res) {
     // 2️⃣ Setup params
     const bucket = DEFAULT_BUCKET;
     const field = req.query.field;
-    const rangeInput = req.query.range || "-12h";
+    const rangeInput = req.query.range || "-2h";
     const limit = Number(req.query.limit || 100);
 
     console.log("Bucket:", bucket);
     console.log("Range:", rangeInput);
 
-
 let q = `
-performance = from(bucket: "${bucket}")
+from(bucket: "${bucket}")
   |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "Performance")
+  |> filter(fn: (r) => r._measurement == "Performance" or r._measurement == "QUALITY")
   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
   |> filter(fn: (r) =>
       r._field == "Quality" or 
       r._field == "OEE" or 
-      r._field == "JPH" or
       r._field == "Pass" or 
       r._field == "Reject" or 
       r._field == "Rework" or
-      r._field == "HRP06:00" or 
-      r._field == "HRP07:00" or 
-      r._field == "HRP08:00" or 
-      r._field == "HRP09:00" or 
-      r._field == "HRP10:00" or 
-      r._field == "HRP11:00" or 
-      r._field == "HRP12:00" or 
-      r._field == "HRP13:00" or 
-      r._field == "total_production_set" or
       r._field == "Productivity" or
       r._field == "Avail" or
       r._field == "Total_Prod_Today"
   )
-
-quality = from(bucket: "${bucket}")
-  |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "QUALITY")
-  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
-
-union(tables: [performance, quality])
+  |> aggregateWindow(every: 10m, fn: mean, createEmpty: false)
   |> sort(columns: ["_time"], desc: true)
+  |> limit(n: ${limit})
 `;
+
+
+// quality = from(bucket: "${bucket}")
+//   |> range(start: ${rangeInput})
+//   |> filter(fn: (r) => r._measurement == "QUALITY")
+//   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
+//   |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
+
+// union(tables: [performance, quality])
+//   |> sort(columns: ["_time"], desc: true)
+// `;
 
 
     if (field) {
