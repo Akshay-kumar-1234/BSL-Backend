@@ -80,24 +80,10 @@ async function isInfluxHealthy() {
     return false;
   }
 }
-
-export async function checkConnection(req, res) {
-  try {
-    const ok = await isInfluxHealthy();
-    if (!ok) return res.status(500).json({ success: false, message: 'Influx is not healthy' });
-    res.json({ success: true, message: 'Influx connected' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Health check failed', error: err?.message });
-  }
-}
-
 export async function queryData(req, res) {
   try {
-    // 1️⃣ Create queryApi with timeout
     const queryApi = influxDB.getQueryApi(ORG);
-    queryApi.setTimeout(30000); // 30 second timeout
 
-    // 2️⃣ Setup params
     const bucket = DEFAULT_BUCKET;
     const rangeInput = req.query.range || "-2h";
     const limit = Number(req.query.limit || 100);
@@ -105,7 +91,6 @@ export async function queryData(req, res) {
     console.log("Bucket:", bucket);
     console.log("Range:", rangeInput);
 
-    // 3️⃣ Build Flux: ✅ FIXED - assign performance variable BEFORE union
     let q = `
 performance = from(bucket: "${bucket}")
   |> range(start: ${rangeInput})
@@ -130,22 +115,22 @@ quality = from(bucket: "${bucket}")
   |> filter(fn: (r) => r._measurement == "QUALITY")
   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
   |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
+  |> sort(columns: ["_time"], desc: true)
+  |> limit(n: ${limit})
 
 union(tables: [performance, quality])
   |> sort(columns: ["_time"], desc: true)
+  |> limit(n: ${limit})
 `;
 
     console.log("Flux Query:\n", q);
 
-    // 4️⃣ Run query
     const rows = await queryApi.collectRows(q);
     console.log(`Received ${rows.length} rows from InfluxDB`);
 
-    // 5️⃣ Organize rows
     let organized = organizeData(rows);
     organized = computeJPH(organized);
 
-    // 6️⃣ Return data
     return res.json({
       success: true,
       data: organized,
