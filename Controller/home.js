@@ -62,6 +62,32 @@ function computeJPH(organizedData) {
 const ORG = INFLUX_ORG;
 const DEFAULT_BUCKET = INFLUX_BUCKET;
 
+// ✅ Add missing health check function
+async function isInfluxHealthy() {
+  let startTime = Date.now();
+  try {
+    console.log("🔍 Starting health check to InfluxDB...");
+    const queryApi = influxDB.getQueryApi(ORG);
+    
+    const result = await queryApi.collectRows(
+      `from(bucket: "${DEFAULT_BUCKET}") |> range(start: -1h) |> limit(n: 1)`
+    );
+    const duration = Date.now() - startTime;
+    console.log(`✅ Health check passed in ${duration}ms`);
+    return true;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`❌ Health check failed after ${duration}ms`);
+    console.error("   Error message:", error?.message);
+    console.error("   Error code:", error?.code);
+    if (error?.response) {
+      console.error("   HTTP Status:", error.response.status);
+      console.error("   Response body:", error.response.body);
+    }
+    return false;
+  }
+}
+
 export async function checkConnection(req, res) {
   try {
     const ok = await isInfluxHealthy();
@@ -73,88 +99,46 @@ export async function checkConnection(req, res) {
 }
 export async function queryData(req, res) {
   try {
-    // 1️⃣ Create queryApi FIRST
+    // 1️⃣ Create queryApi with timeout
     const queryApi = influxDB.getQueryApi(ORG);
+    queryApi.setTimeout(30000); // 30 second timeout
 
     // 2️⃣ Setup params
     const bucket = DEFAULT_BUCKET;
-    const field = req.query.field;
-    const rangeInput = req.query.range || "-2h";
-    const limit = Number(req.query.limit || 100);
+    const rangeInput = req.query.range || "-10m";  // ⚡ Even shorter for debugging
+    const limit = Number(req.query.limit || 20);   // ⚡ Much lower limit
 
     console.log("Bucket:", bucket);
     console.log("Range:", rangeInput);
 
-let q = `
+    // 3️⃣ Simple, clean Flux query (no union complexity)
+    let q = `
 from(bucket: "${bucket}")
   |> range(start: ${rangeInput})
   |> filter(fn: (r) => r._measurement == "Performance" or r._measurement == "QUALITY")
   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) =>
-      r._field == "Quality" or 
-      r._field == "OEE" or 
-      r._field == "Pass" or 
-      r._field == "Reject" or 
-      r._field == "Rework" or
-      r._field == "Productivity" or
-      r._field == "Avail" or
-      r._field == "Total_Prod_Today"
-  )
-  |> aggregateWindow(every: 10m, fn: mean, createEmpty: false)
-  |> sort(columns: ["_time"], desc: true)
   |> limit(n: ${limit})
+`;
 
-quality = from(bucket: "${bucket}")
-  |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "QUALITY")
-  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
+    console.log("Flux Query:\n", q);
 
-union(tables: [performance, quality])
-  |> sort(columns: ["_time"], desc: true)
-`
-;
-
-    if (field) {
-      q += flux`|> filter(fn: (r) => r._field == ${field})\n`;
-    }
-
-    const tags = []
-      .concat(req.query.tag || [])
-      .filter(Boolean)
-      .map((t) => {
-        const [k, ...rest] = String(t).split("=");
-        return [k, rest.join("=")];
-      })
-      .filter(([k, v]) => k && v);
-
-    for (const [k, v] of tags) {
-      q += flux`|> filter(fn: (r) => r[${k}] == ${v})\n`;
-    }
-
-    q += flux`
-    |> sort(columns: ["_time"], desc: true)
-    `;
-
-    console.log("Final Flux:\n", String(q));
-
-    // 4️⃣ Run query AFTER building it
+    // 4️⃣ Run query
     const rows = await queryApi.collectRows(q);
+    console.log(`Received ${rows.length} rows from InfluxDB`);
 
-    // 5️⃣ Organize rows (group by LINE + field)
+    // 5️⃣ Organize rows
     let organized = organizeData(rows);
+    organized = computeJPH(organized);
 
-    // joo mena add kri badd ma dekhoo necha 
-      organized = computeJPH(organized);
-
-    // 6️⃣ Return ONLY organized data
+    // 6️⃣ Return data
     return res.json({
       success: true,
       data: organized,
-      // flux: String(q), // keep flux for debugging
+      rowCount: rows.length,
     });
   } catch (err) {
-    console.error("Influx query error:", err);
+    console.error("❌ Influx query error:", err?.message);
+    console.error("Stack:", err?.stack);
     return res.status(500).json({
       success: false,
       message: "Query failed",
