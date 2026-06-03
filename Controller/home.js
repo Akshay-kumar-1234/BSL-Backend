@@ -1,4 +1,3 @@
-
 // controllers/influxController.js
 import { influxDB,INFLUX_ORG,INFLUX_BUCKET } from '../db/influx.js';
 import { flux } from '@influxdata/influxdb-client';
@@ -29,7 +28,6 @@ function organizeData(rawData) {
 
   return result;
 }
-// ya bheee mena addd kra khud necha ka 
 
 function computeJPH(organizedData) {
   const hrpFields = [
@@ -55,14 +53,9 @@ function computeJPH(organizedData) {
   return organizedData;  
 }
 
- // yha tkkk 
-
-
-
 const ORG = INFLUX_ORG;
 const DEFAULT_BUCKET = INFLUX_BUCKET;
 
-// ✅ Add missing health check function
 async function isInfluxHealthy() {
   let startTime = Date.now();
   try {
@@ -97,6 +90,7 @@ export async function checkConnection(req, res) {
     res.status(500).json({ success: false, message: 'Health check failed', error: err?.message });
   }
 }
+
 export async function queryData(req, res) {
   try {
     // 1️⃣ Create queryApi with timeout
@@ -105,19 +99,40 @@ export async function queryData(req, res) {
 
     // 2️⃣ Setup params
     const bucket = DEFAULT_BUCKET;
-    const rangeInput = req.query.range || "-10m";  // ⚡ Even shorter for debugging
-    const limit = Number(req.query.limit || 20);   // ⚡ Much lower limit
+    const rangeInput = req.query.range || "-2h";
+    const limit = Number(req.query.limit || 100);
 
     console.log("Bucket:", bucket);
     console.log("Range:", rangeInput);
 
-    // 3️⃣ Simple, clean Flux query (no union complexity)
+    // 3️⃣ Build Flux: ✅ FIXED - assign performance variable BEFORE union
     let q = `
-from(bucket: "${bucket}")
+performance = from(bucket: "${bucket}")
   |> range(start: ${rangeInput})
   |> filter(fn: (r) => r._measurement == "Performance" or r._measurement == "QUALITY")
   |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
+  |> filter(fn: (r) =>
+      r._field == "Quality" or 
+      r._field == "OEE" or 
+      r._field == "Pass" or 
+      r._field == "Reject" or 
+      r._field == "Rework" or
+      r._field == "Productivity" or
+      r._field == "Avail" or
+      r._field == "Total_Prod_Today"
+  )
+  |> aggregateWindow(every: 10m, fn: mean, createEmpty: false)
+  |> sort(columns: ["_time"], desc: true)
   |> limit(n: ${limit})
+
+quality = from(bucket: "${bucket}")
+  |> range(start: ${rangeInput})
+  |> filter(fn: (r) => r._measurement == "QUALITY")
+  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
+  |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
+
+union(tables: [performance, quality])
+  |> sort(columns: ["_time"], desc: true)
 `;
 
     console.log("Flux Query:\n", q);
@@ -146,7 +161,3 @@ from(bucket: "${bucket}")
     });
   }
 }
-
-
-
-
