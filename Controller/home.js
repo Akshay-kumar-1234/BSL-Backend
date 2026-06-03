@@ -1,28 +1,25 @@
-// controllers/influxController.js
-import { influxDB,INFLUX_ORG,INFLUX_BUCKET } from '../db/influx.js';
+﻿// controllers/influxController.js
+import { influxDB, INFLUX_ORG, INFLUX_BUCKET } from '../db/influx.js';
 import { flux } from '@influxdata/influxdb-client';
 
-// 🛠️ Organize InfluxDB data
+// Organize InfluxDB rows by line and field
 function organizeData(rawData) {
   const result = {};
 
   rawData.forEach(item => {
-    const line = item.LINE;      // Example: Front_Line, RB, RC
-    const field = item._field;   // Example: HRP06:00, OEE, Quality
-    const time = item._time;     // Example: 2025-09-08T04:33:28Z
-    const value = item._value;   // Example: 11
+    const line = item.LINE;
+    const field = item._field;
+    const time = item._time;
+    const value = item._value;
 
-    // ✅ Create a new line group if not exist
     if (!result[line]) {
       result[line] = {};
     }
 
-    // ✅ Create a new field group if not exist
     if (!result[line][field]) {
       result[line][field] = [];
     }
 
-    // ✅ Push data into that field
     result[line][field].push({ time, value });
   });
 
@@ -36,7 +33,8 @@ function computeJPH(organizedData) {
   ];
 
   for (const line of Object.keys(organizedData)) {
-    let total = 0, count = 0;
+    let total = 0;
+    let count = 0;
 
     hrpFields.forEach(field => {
       if (organizedData[line][field]) {
@@ -47,24 +45,25 @@ function computeJPH(organizedData) {
       }
     });
 
-    // store average JPH (or 0 if no HRP data)
     organizedData[line].JPH = count > 0 ? total / count : 0;
   }
-  return organizedData;  
+
+  return organizedData;
 }
 
 const ORG = INFLUX_ORG;
 const DEFAULT_BUCKET = INFLUX_BUCKET;
 
 async function isInfluxHealthy() {
-  let startTime = Date.now();
+  const startTime = Date.now();
   try {
     console.log("🔍 Starting health check to InfluxDB...");
     const queryApi = influxDB.getQueryApi(ORG);
-    
-    const result = await queryApi.collectRows(
+
+    await queryApi.collectRows(
       `from(bucket: "${DEFAULT_BUCKET}") |> range(start: -1h) |> limit(n: 1)`
     );
+
     const duration = Date.now() - startTime;
     console.log(`✅ Health check passed in ${duration}ms`);
     return true;
@@ -80,51 +79,59 @@ async function isInfluxHealthy() {
     return false;
   }
 }
+
+export async function checkConnection(req, res) {
+  try {
+    const ok = await isInfluxHealthy();
+    if (!ok) {
+      return res.status(500).json({ success: false, message: 'Influx is not healthy' });
+    }
+    return res.json({ success: true, message: 'Influx connected' });
+  } catch (err) {
+    console.error('Health check catch error:', err);
+    return res.status(500).json({ success: false, message: 'Health check failed', error: err?.message });
+  }
+}
+
 export async function queryData(req, res) {
   try {
-    const queryApi = influxDB.getQueryApi(ORG);
-
     const bucket = DEFAULT_BUCKET;
     const rangeInput = req.query.range || "-2h";
-    const limit = Number(req.query.limit || 100);
+    const limit = Number(req.query.limit || 50);
 
-    console.log("Bucket:", bucket);
-    console.log("Range:", rangeInput);
+    const lines = String(req.query.lines || "Front_Line,RB,RC")
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
-    let q = `
-performance = from(bucket: "${bucket}")
+    const fields = String(req.query.fields || "Quality,OEE,Pass,Reject,Rework,Productivity,Avail,Total_Prod_Today,reject,rework")
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const lineFilter = lines.length
+      ? lines.map((line) => `r.LINE == "${line}"`).join(' or ')
+      : 'true';
+
+    const fieldFilter = fields.length
+      ? fields.map((field) => `r._field == "${field}"`).join(' or ')
+      : 'true';
+
+    const q = `
+from(bucket: "${bucket}")
   |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "Performance" or r._measurement == "QUALITY")
-  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) =>
-      r._field == "Quality" or 
-      r._field == "OEE" or 
-      r._field == "Pass" or 
-      r._field == "Reject" or 
-      r._field == "Rework" or
-      r._field == "Productivity" or
-      r._field == "Avail" or
-      r._field == "Total_Prod_Today"
-  )
-  |> aggregateWindow(every: 10m, fn: mean, createEmpty: false)
-  |> sort(columns: ["_time"], desc: true)
-  |> limit(n: ${limit})
-
-quality = from(bucket: "${bucket}")
-  |> range(start: ${rangeInput})
-  |> filter(fn: (r) => r._measurement == "QUALITY")
-  |> filter(fn: (r) => r.LINE == "Front_Line" or r.LINE == "RB" or r.LINE == "RC")
-  |> filter(fn: (r) => r._field == "reject" or r._field == "rework")
-  |> sort(columns: ["_time"], desc: true)
-  |> limit(n: ${limit})
-
-union(tables: [performance, quality])
-  |> sort(columns: ["_time"], desc: true)
+  |> filter(fn: (r) => ${lineFilter})
+  |> filter(fn: (r) => ${fieldFilter})
   |> limit(n: ${limit})
 `;
 
-    console.log("Flux Query:\n", q);
+    console.log('Query bucket:', bucket);
+    console.log('Query range:', rangeInput);
+    console.log('Query lines:', lines);
+    console.log('Query fields:', fields);
+    console.log('Final Flux query:\n', q);
 
+    const queryApi = influxDB.getQueryApi(ORG);
     const rows = await queryApi.collectRows(q);
     console.log(`Received ${rows.length} rows from InfluxDB`);
 
@@ -137,11 +144,11 @@ union(tables: [performance, quality])
       rowCount: rows.length,
     });
   } catch (err) {
-    console.error("❌ Influx query error:", err?.message);
-    console.error("Stack:", err?.stack);
+    console.error('❌ Influx query error:', err?.message);
+    console.error('Stack:', err?.stack);
     return res.status(500).json({
       success: false,
-      message: "Query failed",
+      message: 'Query failed',
       error: err?.message,
     });
   }
